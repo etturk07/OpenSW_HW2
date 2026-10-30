@@ -1,0 +1,3 @@
+const input=document.querySelector('#input'), output=document.querySelector('#output'), status=document.querySelector('#status');
+document.querySelector('#convert').onclick=async()=>{status.textContent='변환 중...';try{const r=await fetch('/api/convert',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:input.value})});if(!r.ok)throw Error();const data=await r.json();output.textContent=data.latex;status.textContent='변환 완료';}catch(e){status.textContent='서버 연결을 확인해 주세요.';}};
+document.querySelector('#copy').onclick=async()=>{if(output.textContent){await navigator.clipboard.writeText(output.textContent);status.textContent='클립보드에 복사했습니다.';}};
