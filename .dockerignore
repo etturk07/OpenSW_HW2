@@ -9,9 +9,10 @@ env
 *.log
 .pytest_cache
 .mypy_cache
-dist
-build
-*.egg-info
 upload
 2026101671_곽김민석_HW2
 *.zip
+actions-runner
+.github-runner
+_work
+runner-cache

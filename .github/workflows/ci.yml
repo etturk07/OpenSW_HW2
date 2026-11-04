@@ -1,102 +1,101 @@
-name: Build and publish Docker image
-
+name: Build, publish, and deploy
 on:
   push:
     branches: [main, master]
     tags: ['v*.*.*']
   pull_request:
     branches: [main, master]
-
 permissions:
   contents: read
-
 env:
   IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/text-to-latex
-
 jobs:
   build-test:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build image
-        uses: docker/build-push-action@v6
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
         with:
           context: .
           load: true
           tags: text-to-latex:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
       - name: Start container
         run: docker run -d --rm --name text-to-latex-ci -p 8000:8000 text-to-latex:ci
-
       - name: Verify container and API
         shell: bash
         run: |
           set -euo pipefail
-          for i in {1..30}; do
-            curl --fail --silent http://127.0.0.1:8000/ > /dev/null && break
-            sleep 1
-          done
+          for i in {1..30}; do curl --fail --silent http://127.0.0.1:8000/ > /dev/null && break || sleep 1; done
           curl --fail --silent http://127.0.0.1:8000/ | grep -q '<title>'
-          curl --fail --silent \
-            -H 'Content-Type: application/json' \
-            -d '{"text":"Title\n\n- Item"}' \
-            http://127.0.0.1:8000/api/convert | grep -q '\\documentclass'
-          for i in {1..30}; do
-            status="$(docker inspect -f '{{.State.Health.Status}}' text-to-latex-ci)"
-            [[ "$status" == healthy ]] && break
-            [[ "$status" == unhealthy ]] && exit 1
-            sleep 1
-          done
+          curl --fail --silent -H 'Content-Type: application/json' -d '{"text":"Title\n\n- Item"}' http://127.0.0.1:8000/api/convert | grep -q '\\documentclass'
+          for i in {1..30}; do status="$(docker inspect -f '{{.State.Health.Status}}' text-to-latex-ci)"; [[ "$status" == healthy ]] && break; [[ "$status" == unhealthy ]] && exit 1; sleep 1; done
           test "$(docker inspect -f '{{.State.Health.Status}}' text-to-latex-ci)" = healthy
-
-      - name: Show container logs on failure
-        if: failure()
+      - if: failure()
         run: docker logs text-to-latex-ci || true
-
-      - name: Stop container
-        if: always()
+      - if: always()
         run: docker stop text-to-latex-ci || true
-
   publish:
     needs: build-test
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Define image tags
-        id: meta
+      - id: meta
+        name: Define image tags
         shell: bash
         run: |
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            VERSION="${GITHUB_REF#refs/tags/v}"
-            echo "tags=${IMAGE_NAME}:${VERSION},${IMAGE_NAME}:latest" >> "$GITHUB_OUTPUT"
-          else
-            echo "tags=${IMAGE_NAME}:latest" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Build and push
-        uses: docker/build-push-action@v6
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then v="${GITHUB_REF#refs/tags/v}"; echo "tags=${IMAGE_NAME}:${v},${IMAGE_NAME}:latest" >> "$GITHUB_OUTPUT"; else echo "tags=${IMAGE_NAME}:latest" >> "$GITHUB_OUTPUT"; fi
+      - uses: docker/build-push-action@v6
         with:
           context: .
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+  deploy:
+    needs: publish
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: [self-hosted, Windows, X64]
+    env:
+      CONTAINER_NAME: text-to-latex
+    steps:
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - id: image
+        name: Select image tag
+        shell: pwsh
+        run: |
+          if ("${env:GITHUB_REF}" -like "refs/tags/v*") { $v = "${env:GITHUB_REF}" -replace '^refs/tags/v', ''; "IMAGE=${{ secrets.DOCKERHUB_USERNAME }}/text-to-latex:$v" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append } else { "IMAGE=${{ secrets.DOCKERHUB_USERNAME }}/text-to-latex:latest" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append }
+      - name: Pull published image
+        shell: pwsh
+        run: docker pull "${{ steps.image.outputs.IMAGE }}"
+      - name: Replace local container
+        shell: pwsh
+        run: |
+          $old = docker ps -aq --filter "name=^/${env:CONTAINER_NAME}$"
+          if ($old) { docker rm --force $old }
+          docker run --detach --restart unless-stopped --name $env:CONTAINER_NAME --publish 8000:8000 "${{ steps.image.outputs.IMAGE }}"
+      - name: Verify deployed service
+        shell: pwsh
+        run: |
+          $ok = $false
+          for ($i=0; $i -lt 30; $i++) { try { $r=Invoke-WebRequest -Uri 'http://127.0.0.1:8000/' -UseBasicParsing -TimeoutSec 3; if ($r.StatusCode -eq 200) { $ok=$true; break } } catch { Start-Sleep 1 } }
+          if (-not $ok) { docker logs $env:CONTAINER_NAME; throw '서비스 HTTP 검증 실패' }
+          $body = @{ text = "Title`n`n- Item" } | ConvertTo-Json
+          $api = Invoke-RestMethod -Uri 'http://127.0.0.1:8000/api/convert' -Method Post -ContentType 'application/json' -Body $body
+          if ($api.latex -notmatch '\\documentclass') { throw 'LaTeX 변환 API 검증 실패' }
+      - if: always()
+        shell: pwsh
+        run: docker ps -a --filter "name=^/${env:CONTAINER_NAME}$"
