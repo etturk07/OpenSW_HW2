@@ -1,0 +1,17 @@
+.git
+.github
+__pycache__
+*.py[cod]
+.venv
+venv
+env
+.env
+*.log
+.pytest_cache
+.mypy_cache
+dist
+build
+*.egg-info
+upload
+2026101671_곽김민석_HW2
+*.zip
