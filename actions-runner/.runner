@@ -1,0 +1,11 @@
+﻿{
+  "agentId": 2,
+  "agentName": "GKMS07",
+  "poolId": 1,
+  "poolName": "Default",
+  "serverUrl": "https://pipelinesghubeus21.actions.githubusercontent.com/stg5iqYLBhVB3XMOrgVJPvzp72hY1cndYTW4KPxLT0dCT5Y25u/",
+  "gitHubUrl": "https://github.com/etturk07/OpenSW_HW2",
+  "workFolder": "_work",
+  "useV2Flow": true,
+  "serverUrlV2": "https://broker.actions.githubusercontent.com/"
+}
